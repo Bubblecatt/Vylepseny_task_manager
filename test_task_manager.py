@@ -1,138 +1,92 @@
+import pytest
 import mysql.connector
-from datetime import datetime
+from task_manager import pripojeni_db, vytvoreni_tabulky
 
-# 1. Připojení k databázi
-def pripojeni_db():
-    try:
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",       # změň dle své konfigurace
-            password="",       # změň dle své konfigurace
-            database="ukoly_db"
-        )
-        return conn
-    except mysql.connector.Error as err:
-        print(f"Chyba při připojování k databázi: {err}")
-        return None
+# Připojení pro testy
+def get_test_connection():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",
+        database="ukoly_db"
+    )
 
-# 2. Vytvoření tabulky
-def vytvoreni_tabulky():
-    conn = pripojeni_db()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ukoly (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                nazev VARCHAR(255) NOT NULL,
-                popis TEXT NOT NULL,
-                stav ENUM('Nezahájeno', 'Probíhá', 'Hotovo') DEFAULT 'Nezahájeno',
-                datum_vytvoreni DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-# 3. Přidání úkolu
-def pridat_ukol():
-    nazev = input("Zadejte název úkolu: ").strip()
-    popis = input("Zadejte popis úkolu: ").strip()
-
-    if not nazev or not popis:
-        print("Název i popis jsou povinné!")
-        return
-
-    conn = pripojeni_db()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO ukoly (nazev, popis) VALUES (%s, %s)", (nazev, popis))
-        conn.commit()
-        print("Úkol byl přidán.")
-        cursor.close()
-        conn.close()
-
-# 4. Zobrazení úkolů
-def zobrazit_ukoly():
-    conn = pripojeni_db()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, nazev, popis, stav FROM ukoly WHERE stav IN ('Nezahájeno', 'Probíhá')")
-        rows = cursor.fetchall()
-        if not rows:
-            print("Žádné úkoly k zobrazení.")
-        else:
-            for r in rows:
-                print(f"{r[0]} | {r[1]} | {r[2]} | {r[3]}")
-        cursor.close()
-        conn.close()
-
-# 5. Aktualizace úkolu
-def aktualizovat_ukol():
-    zobrazit_ukoly()
-    id_ukolu = input("Zadejte ID úkolu pro změnu stavu: ")
-    novy_stav = input("Zadejte nový stav (Probíhá/Hotovo): ").strip()
-
-    if novy_stav not in ["Probíhá", "Hotovo"]:
-        print("Neplatný stav!")
-        return
-
-    conn = pripojeni_db()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM ukoly WHERE id = %s", (id_ukolu,))
-        if cursor.fetchone() is None:
-            print("Úkol s tímto ID neexistuje.")
-        else:
-            cursor.execute("UPDATE ukoly SET stav = %s WHERE id = %s", (novy_stav, id_ukolu))
-            conn.commit()
-            print("Stav úkolu byl aktualizován.")
-        cursor.close()
-        conn.close()
-
-# 6. Odstranění úkolu
-def odstranit_ukol():
-    zobrazit_ukoly()
-    id_ukolu = input("Zadejte ID úkolu k odstranění: ")
-
-    conn = pripojeni_db()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM ukoly WHERE id = %s", (id_ukolu,))
-        if cursor.fetchone() is None:
-            print("Úkol s tímto ID neexistuje.")
-        else:
-            cursor.execute("DELETE FROM ukoly WHERE id = %s", (id_ukolu,))
-            conn.commit()
-            print("Úkol byl odstraněn.")
-        cursor.close()
-        conn.close()
-
-# 7. Hlavní menu
-def hlavni_menu():
+@pytest.fixture(scope="module", autouse=True)
+def setup_teardown():
     vytvoreni_tabulky()
-    while True:
-        print("\n--- Hlavní menu ---")
-        print("1. Přidat úkol")
-        print("2. Zobrazit úkoly")
-        print("3. Aktualizovat úkol")
-        print("4. Odstranit úkol")
-        print("5. Ukončit program")
+    yield
+    # Po testech smažeme testovací úkoly
+    conn = get_test_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM ukoly WHERE nazev LIKE 'TEST%';")
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-        volba = input("Vyberte možnost: ")
+# --- TESTY PRO PRIDANI ---
+def test_pridat_ukol_valid():
+    conn = get_test_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO ukoly (nazev, popis) VALUES ('TEST Úkol', 'Popis testu')")
+    conn.commit()
+    cursor.execute("SELECT * FROM ukoly WHERE nazev='TEST Úkol'")
+    result = cursor.fetchone()
+    assert result is not None
+    cursor.close()
+    conn.close()
 
-        if volba == "1":
-            pridat_ukol()
-        elif volba == "2":
-            zobrazit_ukoly()
-        elif volba == "3":
-            aktualizovat_ukol()
-        elif volba == "4":
-            odstranit_ukol()
-        elif volba == "5":
-            print("Program ukončen.")
-            break
-        else:
-            print("Neplatná volba, zkuste znovu.")
+def test_pridat_ukol_invalid():
+    with pytest.raises(mysql.connector.errors.IntegrityError):
+        conn = get_test_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO ukoly (nazev, popis) VALUES ('', '')")
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-if __name__ == "__main__":
-    hlavni_menu()
+# --- TESTY PRO AKTUALIZACI ---
+def test_aktualizace_valid():
+    conn = get_test_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO ukoly (nazev, popis) VALUES ('TEST Aktualizace', 'Popis')")
+    conn.commit()
+    cursor.execute("SELECT id FROM ukoly WHERE nazev='TEST Aktualizace'")
+    id_ukolu = cursor.fetchone()[0]
+    cursor.execute("UPDATE ukoly SET stav='Hotovo' WHERE id=%s", (id_ukolu,))
+    conn.commit()
+    cursor.execute("SELECT stav FROM ukoly WHERE id=%s", (id_ukolu,))
+    assert cursor.fetchone()[0] == "Hotovo"
+    cursor.close()
+    conn.close()
+
+def test_aktualizace_invalid():
+    conn = get_test_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE ukoly SET stav='Neexistuje' WHERE id=0")
+    conn.rollback()
+    cursor.close()
+    conn.close()
+
+# --- TESTY PRO ODSTRANENI ---
+def test_odstranit_valid():
+    conn = get_test_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO ukoly (nazev, popis) VALUES ('TEST Smazání', 'Popis')")
+    conn.commit()
+    cursor.execute("SELECT id FROM ukoly WHERE nazev='TEST Smazání'")
+    id_ukolu = cursor.fetchone()[0]
+    cursor.execute("DELETE FROM ukoly WHERE id=%s", (id_ukolu,))
+    conn.commit()
+    cursor.execute("SELECT * FROM ukoly WHERE id=%s", (id_ukolu,))
+    assert cursor.fetchone() is None
+    cursor.close()
+    conn.close()
+
+def test_odstranit_invalid():
+    conn = get_test_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM ukoly WHERE id=-1")  # ID neexistuje
+    conn.commit()
+    assert cursor.rowcount == 0
+    cursor.close()
+    conn.close()
